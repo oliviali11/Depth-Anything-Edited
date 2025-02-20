@@ -1,78 +1,101 @@
 import argparse
 import cv2
+import glob
+import matplotlib
 import numpy as np
 import os
 import torch
-import torch.nn.functional as F
-from torchvision.transforms import Compose
-from tqdm import tqdm
 
-from depth_anything.dpt import DepthAnything
-from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
-
+from depth_anything.dpt import DepthAnything  # Use Depth Anything V1
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--img-path', type=str)
-    parser.add_argument('--outdir', type=str, default='./vis_depth')
+    parser = argparse.ArgumentParser(description='Depth Anything V1')
+
+    parser.add_argument('--video-path', type=str)
+    parser.add_argument('--input-size', type=int, default=518)
+    parser.add_argument('--outdir', type=str, default='./vis_video_depth')
+
     parser.add_argument('--encoder', type=str, default='vitl', choices=['vits', 'vitb', 'vitl'])
-    
+
+    parser.add_argument('--pred-only', dest='pred_only', action='store_true', help='only display the prediction')
+    parser.add_argument('--grayscale', dest='grayscale', action='store_true', help='do not apply colorful palette')
+
     args = parser.parse_args()
-    
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    depth_anything = DepthAnything.from_pretrained('LiheYoung/depth_anything_{}14'.format(args.encoder)).to(DEVICE).eval()
-    
-    transform = Compose([
-        Resize(
-            width=518,
-            height=518,
-            resize_target=False,
-            keep_aspect_ratio=True,
-            ensure_multiple_of=14,
-            resize_method='lower_bound',
-            image_interpolation_method=cv2.INTER_CUBIC,
-        ),
-        NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        PrepareForNet(),
-    ])
-    
-    if os.path.isfile(args.img_path):
-        if args.img_path.endswith('txt'):
-            with open(args.img_path, 'r') as f:
+
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+
+    # Load Depth Anything V1 model from local checkpoint
+    model_configs = {
+        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+        'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
+
+    depth_anything = DepthAnything(**model_configs[args.encoder])
+    depth_anything.load_state_dict(torch.load(f'checkpoints/depth_anything_{args.encoder}.pth', map_location='cpu'))
+    depth_anything = depth_anything.to(DEVICE).eval()
+
+    if os.path.isfile(args.video_path):
+        if args.video_path.endswith('txt'):
+            with open(args.video_path, 'r') as f:
                 filenames = f.read().splitlines()
         else:
-            filenames = [args.img_path]
+            filenames = [args.video_path]
     else:
-        filenames = [os.path.join(args.img_path, f) for f in os.listdir(args.img_path) if not f.startswith('.')]
-        filenames.sort()
-    
+        filenames = glob.glob(os.path.join(args.video_path, '**/*'), recursive=True)
+
     os.makedirs(args.outdir, exist_ok=True)
 
-    depth_arrays = []
+    margin_width = 50
+    cmap = matplotlib.colormaps.get_cmap('Spectral_r')
 
-    for filename in tqdm(filenames):
-        raw_image = cv2.imread(filename)
-        image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
-        
-        h, w = image.shape[:2]
-        
-        image = transform({'image': image})['image']
-        image = torch.from_numpy(image).unsqueeze(0).to(DEVICE)
-        
-        with torch.no_grad():
-            depth = depth_anything(image)
-        
-        depth = F.interpolate(depth[None], (h, w), mode='bilinear', align_corners=False)[0, 0]
-        
-        depth = depth.cpu().numpy().astype(np.float32)  # Keep as float for better precision
+    for k, filename in enumerate(filenames):
+        print(f'Processing {k+1}/{len(filenames)}: {filename}')
 
-        depth_arrays.append(depth)
+        raw_video = cv2.VideoCapture(filename)
+        frame_width, frame_height = int(raw_video.get(cv2.CAP_PROP_FRAME_WIDTH)), int(raw_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_rate = int(raw_video.get(cv2.CAP_PROP_FPS))
 
-    # Save depth maps as an npz file
-    depth_npz_output = os.path.join(args.outdir, "depth_maps.npz")
-    np.savez(depth_npz_output, depth=np.stack(depth_arrays))
+        output_width = frame_width if args.pred_only else frame_width * 2 + margin_width
+        output_path = os.path.join(args.outdir, os.path.splitext(os.path.basename(filename))[0] + '.mp4')
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_rate, (output_width, frame_height))
 
-    print(f"Saved depth maps to {depth_npz_output}")
+        depth_arrays = []
+
+        while raw_video.isOpened():
+            ret, raw_frame = raw_video.read()
+            if not ret:
+                break
+
+            # Infer depth using Depth Anything V1
+            depth = depth_anything.infer_image(raw_frame, args.input_size)
+
+            depth_shape = depth.shape
+            depth_arrays.append(np.reshape(depth, (1, depth_shape[0], depth_shape[1])))
+
+            depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
+            depth = depth.astype(np.uint8)
+
+            if args.grayscale:
+                depth = np.repeat(depth[..., np.newaxis], 3, axis=-1)
+            else:
+                depth = (cmap(depth)[:, :, :3] * 255)[:, :, ::-1].astype(np.uint8)
+
+            if args.pred_only:
+                out.write(depth)
+            else:
+                split_region = np.ones((frame_height, margin_width, 3), dtype=np.uint8) * 255
+                combined_frame = cv2.hconcat([raw_frame, split_region, depth])
+                out.write(combined_frame)
+
+        raw_video.release()
+        out.release()
+
+        npz_depth_file = np.concatenate(depth_arrays)
+        depth_tensor_output = os.path.join(args.outdir, os.path.splitext(os.path.basename(filename))[0] + ".npz")
+        np.savez(depth_tensor_output, depth=npz_depth_file)
+
+        print(f"Saved depth map to {depth_tensor_output}")
+
 
         
