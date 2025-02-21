@@ -1,6 +1,7 @@
 import argparse
 import cv2
 import numpy as np
+import matplotlib
 import os
 import torch
 import torch.nn.functional as F
@@ -21,6 +22,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     margin_width = 50
+    cmap = matplotlib.colormaps.get_cmap('Spectral_r')
 
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     
