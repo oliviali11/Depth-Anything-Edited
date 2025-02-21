@@ -85,9 +85,14 @@ if __name__ == '__main__':
             with torch.no_grad():
                 depth = depth_anything(rawframe)
 
+            depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
+
             depth_shape = depth.shape
 
+            depth = depth.cpu().numpy()  # Move to CPU and convert to NumPy
             depth_arrays.append(np.reshape(depth, (1, depth_shape[0], depth_shape[1])))
+
+            # depth_arrays.append(np.reshape(depth, (1, depth_shape[0], depth_shape[1])))
             
             depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
             depth = depth.astype(np.uint8)
