@@ -15,6 +15,7 @@ if __name__ == '__main__':
     parser.add_argument('--video-path', type=str)
     parser.add_argument('--outdir', type=str, default='./vis_video_depth')
     parser.add_argument('--encoder', type=str, default='vitl', choices=['vits', 'vitb', 'vitl'])
+    parser.add_argument('--pred-only', dest='pred_only', action='store_true', help='only display the prediction')
     
     args = parser.parse_args()
     
@@ -70,25 +71,38 @@ if __name__ == '__main__':
             ret, raw_frame = raw_video.read()
             if not ret:
                 break
-            
-            frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB) / 255.0
-            
-            frame = transform({'image': frame})['image']
-            frame = torch.from_numpy(frame).unsqueeze(0).to(DEVICE)
-            
-            with torch.no_grad():
-                depth = depth_anything(frame)
 
-            depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
+            # here
+
+            depth = depth_anything.infer_image(raw_frame, args.input_size)
+
+            depth_shape = depth.shape
+
+            depth_arrays.append(np.reshape(depth, (1, depth_shape[0], depth_shape[1])))
+            
             depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
+            depth = depth.astype(np.uint8)
             
-            depth = depth.cpu().numpy().astype(np.uint8)
-            depth_color = cv2.applyColorMap(depth, cv2.COLORMAP_INFERNO)
+            if args.grayscale:
+                depth = np.repeat(depth[..., np.newaxis], 3, axis=-1)
+            else:
+                depth = (cmap(depth)[:, :, :3] * 255)[:, :, ::-1].astype(np.uint8)
             
-            split_region = np.ones((frame_height, margin_width, 3), dtype=np.uint8) * 255
-            combined_frame = cv2.hconcat([raw_frame, split_region, depth_color])
+            if args.pred_only:
+                out.write(depth)
+            else:
+                split_region = np.ones((frame_height, margin_width, 3), dtype=np.uint8) * 255
+                combined_frame = cv2.hconcat([raw_frame, split_region, depth])
+                
+                out.write(combined_frame)
             
-            out.write(combined_frame)
+            # here
         
         raw_video.release()
         out.release()
+
+        # save depth as tensor
+        npz_depth_file = np.concatenate(depth_arrays)
+
+        depth_tensor_output = os.path.join(args.outdir, os.path.splitext(os.path.basename(filename))[0] + ".npz")
+        np.savez(depth_tensor_output, depth=npz_depth_file)
