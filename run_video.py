@@ -16,6 +16,7 @@ if __name__ == '__main__':
     parser.add_argument('--outdir', type=str, default='./vis_video_depth')
     parser.add_argument('--encoder', type=str, default='vitl', choices=['vits', 'vitb', 'vitl'])
     parser.add_argument('--pred-only', dest='pred_only', action='store_true', help='only display the prediction')
+    parser.add_argument('--grayscale', dest='grayscale', action='store_true', help='do not apply colorful palette')
     
     args = parser.parse_args()
     
@@ -66,6 +67,9 @@ if __name__ == '__main__':
         filename = os.path.basename(filename)
         output_path = os.path.join(args.outdir, filename[:filename.rfind('.')] + '_video_depth.mp4')
         out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_rate, (output_width, frame_height))
+
+        # keep track of numpy arrays representing depth
+        depth_arrays = []
         
         while raw_video.isOpened():
             ret, raw_frame = raw_video.read()
@@ -74,7 +78,19 @@ if __name__ == '__main__':
 
             # here
 
-            depth = depth_anything.infer_image(raw_frame, args.input_size)
+            # depth = depth_anything.infer_image(raw_frame, args.input_size)
+
+            # depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
+
+            frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB) / 255.0
+            
+            frame = transform({'image': frame})['image']
+            frame = torch.from_numpy(frame).unsqueeze(0).to(DEVICE)
+
+            with torch.no_grad():
+                depth = depth_anything(frame)
+
+            depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
 
             depth_shape = depth.shape
 
