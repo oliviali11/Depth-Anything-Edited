@@ -83,7 +83,7 @@ if __name__ == '__main__':
             # depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
 
             with torch.no_grad():
-                depth = depth_anything(rawframe)
+                depth = depth_anything(raw_frame)
 
             depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
 
