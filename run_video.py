@@ -82,15 +82,8 @@ if __name__ == '__main__':
 
             # depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
 
-            frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB) / 255.0
-            
-            frame = transform({'image': frame})['image']
-            frame = torch.from_numpy(frame).unsqueeze(0).to(DEVICE)
-
             with torch.no_grad():
-                depth = depth_anything(frame)
-
-            depth = F.interpolate(depth[None], (frame_height, frame_width), mode='bilinear', align_corners=False)[0, 0]
+                depth = depth_anything(rawframe)
 
             depth_shape = depth.shape
 
